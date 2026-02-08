@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>2004Scape World Map</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; font-family: Arial, Helvetica, sans-serif; }
+        canvas { display: block; cursor: grab; }
+        canvas.dragging { cursor: grabbing; }
+        #coords {
+            position: fixed;
+            bottom: 8px;
+            left: 8px;
+            color: #fff;
+            background: rgba(0,0,0,0.7);
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 3px;
+            pointer-events: none;
+        }
+        #tooltip {
+            position: fixed;
+            color: #fff;
+            background: rgba(0,0,0,0.8);
+            padding: 2px 6px;
+            font-size: 11px;
+            border-radius: 3px;
+            pointer-events: none;
+            display: none;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="map"></canvas>
+    <div id="coords"></div>
+    <div id="tooltip"></div>
+    <script>
+    (function() {
+        var MAP_MIN_X = <%= mapBounds.minX %>;
+        var MAP_MIN_Z = <%= mapBounds.minZ %>;
+        var MAP_WIDTH = <%= mapBounds.width %>;
+        var MAP_HEIGHT = <%= mapBounds.height %>;
+        var labels = <%- JSON.stringify(labels) %>;
+
+        var canvas = document.getElementById('map');
+        var ctx = canvas.getContext('2d');
+        var coordsEl = document.getElementById('coords');
+        var tooltipEl = document.getElementById('tooltip');
+
+        var mapImg = new Image();
+        var mapLoaded = false;
+
+        var offsetX = 0;
+        var offsetY = 0;
+        var scale = 1;
+        var players = [];
+
+        var dragging = false;
+        var dragStartX = 0;
+        var dragStartY = 0;
+        var dragOffsetX = 0;
+        var dragOffsetY = 0;
+
+        var mouseX = 0;
+        var mouseY = 0;
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            draw();
+        }
+
+        function tileToPixel(x, z) {
+            return {
+                px: x - MAP_MIN_X,
+                py: (MAP_HEIGHT - 1) - (z - MAP_MIN_Z)
+            };
+        }
+
+        function screenToTile(sx, sy) {
+            var px = (sx - offsetX) / scale;
+            var py = (sy - offsetY) / scale;
+            return {
+                x: Math.floor(px + MAP_MIN_X),
+                z: Math.floor((MAP_HEIGHT - 1 - py) + MAP_MIN_Z)
+            };
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, scale);
+
+            if (mapLoaded) {
+                ctx.imageSmoothingEnabled = scale < 2;
+                ctx.drawImage(mapImg, 0, 0);
+            }
+
+            // Draw labels when zoomed in enough
+            if (scale >= 0.5) {
+                for (var i = 0; i < labels.length; i++) {
+                    var label = labels[i];
+                    var pos = tileToPixel(label.x, label.z);
+
+                    var fontSize;
+                    if (label.size === 0) fontSize = 11;
+                    else if (label.size === 1) fontSize = 14;
+                    else fontSize = 18;
+
+                    // Only show smaller labels when zoomed in more
+                    if (label.size === 0 && scale < 1.5) continue;
+                    if (label.size === 1 && scale < 0.8) continue;
+
+                    ctx.font = 'bold ' + fontSize + 'px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+
+                    var lines = label.name.split('\n');
+                    var lineHeight = fontSize * 1.2;
+                    var startY = pos.py - ((lines.length - 1) * lineHeight) / 2;
+
+                    for (var j = 0; j < lines.length; j++) {
+                        var ly = startY + j * lineHeight;
+                        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+                        ctx.lineWidth = 3 / scale;
+                        ctx.strokeText(lines[j], pos.px, ly);
+                        ctx.fillStyle = '#fff';
+                        ctx.fillText(lines[j], pos.px, ly);
+                    }
+                }
+            }
+
+            // Draw player dots
+            var dotRadius = Math.max(3, 5 / scale);
+            for (var i = 0; i < players.length; i++) {
+                var p = players[i];
+                var pos = tileToPixel(p.x, p.z);
+                ctx.beginPath();
+                ctx.arc(pos.px + 0.5, pos.py + 0.5, dotRadius, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1 / scale;
+                ctx.stroke();
+            }
+
+            ctx.restore();
+        }
+
+        // Center on Lumbridge (3222, 3218)
+        function centerOn(tileX, tileZ) {
+            var pos = tileToPixel(tileX, tileZ);
+            offsetX = canvas.width / 2 - pos.px * scale;
+            offsetY = canvas.height / 2 - pos.py * scale;
+        }
+
+        mapImg.onload = function() {
+            mapLoaded = true;
+            scale = Math.min(canvas.width / MAP_WIDTH, canvas.height / MAP_HEIGHT) * 2;
+            centerOn(3222, 3218);
+            draw();
+        };
+        mapImg.src = '/map/worldmap.png';
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Pan
+        canvas.addEventListener('mousedown', function(e) {
+            if (e.button === 0) {
+                dragging = true;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                dragOffsetX = offsetX;
+                dragOffsetY = offsetY;
+                canvas.classList.add('dragging');
+            }
+        });
+
+        window.addEventListener('mousemove', function(e) {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+
+            if (dragging) {
+                offsetX = dragOffsetX + (e.clientX - dragStartX);
+                offsetY = dragOffsetY + (e.clientY - dragStartY);
+                draw();
+            }
+
+            // Update coordinate display
+            var tile = screenToTile(e.clientX, e.clientY);
+            coordsEl.textContent = tile.x + ', ' + tile.z;
+
+            // Check player hover
+            var hoveredPlayer = null;
+            for (var i = 0; i < players.length; i++) {
+                var p = players[i];
+                var pos = tileToPixel(p.x, p.z);
+                var sx = pos.px * scale + offsetX;
+                var sy = pos.py * scale + offsetY;
+                var dist = Math.sqrt((e.clientX - sx) * (e.clientX - sx) + (e.clientY - sy) * (e.clientY - sy));
+                if (dist < Math.max(6, 8 * scale)) {
+                    hoveredPlayer = p;
+                    break;
+                }
+            }
+
+            if (hoveredPlayer) {
+                tooltipEl.style.display = 'block';
+                tooltipEl.style.left = (e.clientX + 12) + 'px';
+                tooltipEl.style.top = (e.clientY - 8) + 'px';
+                tooltipEl.textContent = hoveredPlayer.name;
+            } else {
+                tooltipEl.style.display = 'none';
+            }
+        });
+
+        window.addEventListener('mouseup', function() {
+            dragging = false;
+            canvas.classList.remove('dragging');
+        });
+
+        // Zoom (centered on cursor)
+        canvas.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            var zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+            var newScale = Math.min(Math.max(scale * zoomFactor, 0.1), 20);
+
+            // Zoom centered on cursor
+            var wx = (e.clientX - offsetX) / scale;
+            var wy = (e.clientY - offsetY) / scale;
+            scale = newScale;
+            offsetX = e.clientX - wx * scale;
+            offsetY = e.clientY - wy * scale;
+
+            draw();
+        }, { passive: false });
+
+        // Poll players
+        function fetchPlayers() {
+            fetch('/api/players')
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    players = data;
+                    draw();
+                })
+                .catch(function() {});
+        }
+        fetchPlayers();
+        setInterval(fetchPlayers, 5000);
+    })();
+    </script>
+</body>
+</html>

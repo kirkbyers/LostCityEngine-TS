@@ -6,6 +6,7 @@ import { register } from 'prom-client';
 
 import { CrcBuffer } from '#/cache/CrcTable.js';
 import World from '#/engine/World.js';
+import { generateWorldMapImage, getMapBounds } from '#/map/WorldMapImage.js';
 import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 import NullClientSocket from '#/server/NullClientSocket.js';
 import WSClientSocket from '#/server/ws/WSClientSocket.js';
@@ -30,6 +31,33 @@ MIME_TYPES.set('.css', 'text/css');
 MIME_TYPES.set('.html', 'text/html');
 MIME_TYPES.set('.wasm', 'application/wasm');
 MIME_TYPES.set('.sf2', 'application/octet-stream');
+MIME_TYPES.set('.png', 'image/png');
+
+let labelsCache: { name: string; x: number; z: number; size: number }[] | null = null;
+
+function getLabels(): { name: string; x: number; z: number; size: number }[] {
+    if (!labelsCache) {
+        const labelsPath = `${Environment.BUILD_SRC_DIR}/maps/labels.txt`;
+        if (!fs.existsSync(labelsPath)) {
+            return [];
+        }
+        labelsCache = fs
+            .readFileSync(labelsPath, 'ascii')
+            .replace(/\r/g, '')
+            .split('\n')
+            .filter((x: string) => x.startsWith('='))
+            .map((x: string) => {
+                const parts = x.substring(1).split(',');
+                return {
+                    name: parts[0].replace(/\//g, '\n'),
+                    x: parseInt(parts[1]),
+                    z: parseInt(parts[2]),
+                    size: parseInt(parts[3])
+                };
+            });
+    }
+    return labelsCache;
+}
 
 export type WebSocketData = {
     client: WSClientSocket,
@@ -42,6 +70,8 @@ export type WebSocketRoutes = {
 };
 
 export async function startWeb() {
+    await generateWorldMapImage();
+
     Bun.serve<WebSocketData, WebSocketRoutes>({
         port: Environment.WEB_PORT,
         async fetch(req, server) {
@@ -83,6 +113,23 @@ export async function startWeb() {
                 return new Response(Bun.file('data/pack/ondemand.zip'));
             } else if (url.pathname.startsWith('/build')) {
                 return new Response(Bun.file('data/pack/server/build'));
+            } else if (url.pathname === '/map') {
+                return new Response(await ejs.renderFile('view/map.ejs', {
+                    mapBounds: getMapBounds(),
+                    labels: getLabels()
+                }), {
+                    headers: {
+                        'Content-Type': 'text/html'
+                    }
+                });
+            } else if (url.pathname === '/api/players') {
+                const players = [];
+                for (const player of World.playerLoop.all()) {
+                    players.push({ name: player.displayName, x: player.x, z: player.z, level: player.level });
+                }
+                return new Response(JSON.stringify(players), {
+                    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' }
+                });
             } else if (url.pathname === '/rs2.cgi') {
                 const plugin = tryParseInt(url.searchParams.get('plugin'), 0);
                 const lowmem = tryParseInt(url.searchParams.get('lowmem'), 0);
